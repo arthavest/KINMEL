@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LocalBazaar - Shop small businesses</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>tailwind.config={theme:{extend:{colors:{ink:'#16213A',leaf:'#1E7A5F',gold:'#F2A900',paper:'#F7F6F2'},fontFamily:{sans:['"Bricolage Grotesque"','system-ui','sans-serif']}}}}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;500;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<style type="text/tailwindcss">
+.inp{@apply w-full border border-slate-300 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-leaf}
+.btn{@apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 font-bold transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gold}
+.btn-p{@apply btn bg-leaf text-white hover:bg-emerald-800}
+.btn-d{@apply btn bg-ink text-white hover:bg-slate-700}
+.btn-o{@apply btn border border-slate-300 bg-white hover:bg-slate-100}
+.lbl{@apply block text-sm font-medium text-slate-700 mb-1}
+</style>
+</head>
+<body class="bg-paper font-sans text-slate-800 min-h-screen flex flex-col">
+
+<header class="bg-ink text-white sticky top-0 z-40">
+  <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+    <a href="#" onclick="render();return false" class="text-xl font-extrabold tracking-tight"><i class="fas fa-store text-gold mr-2"></i>LocalBazaar</a>
+    <nav id="nav" class="flex items-center gap-2 text-sm"></nav>
+  </div>
+  <div class="bg-gold text-ink text-xs sm:text-sm text-center py-1.5 px-3 font-medium">
+    LocalBazaar only takes your order. Each business delivers its own orders with its own delivery team.
+  </div>
+</header>
+
+<main id="main" class="max-w-6xl w-full mx-auto px-4 py-8 flex-grow"></main>
+
+<footer class="bg-ink text-slate-300 text-center text-sm py-5 px-4">
+  <i class="fas fa-truck mr-1"></i> Delivery is arranged directly between you and the business. This is a demo: all data stays in your browser.
+</footer>
+
+<!-- Cart drawer -->
+<div id="cart-ov" onclick="toggleCart(false)" class="hidden fixed inset-0 bg-black/40 z-40"></div>
+<aside id="cart" class="fixed top-0 right-0 h-full w-full sm:w-96 bg-white shadow-2xl z-50 flex flex-col translate-x-full transition-transform duration-300" aria-label="Shopping cart">
+  <div class="p-4 bg-leaf text-white flex justify-between items-center">
+    <h2 class="text-lg font-bold">Your cart</h2>
+    <button onclick="toggleCart(false)" class="text-2xl leading-none" aria-label="Close cart">&times;</button>
+  </div>
+  <div id="cart-items" class="flex-grow overflow-y-auto p-4"></div>
+  <div class="p-4 border-t bg-slate-50">
+    <div class="flex justify-between font-bold text-lg mb-3"><span>Total</span><span id="cart-total"></span></div>
+    <button id="co-btn" onclick="openCheckout()" class="btn-p w-full">Checkout</button>
+  </div>
+</aside>
+
+<!-- Modal -->
+<div id="modal" class="hidden fixed inset-0 z-[60] bg-black/50 overflow-y-auto p-4">
+  <div id="mbox" class="bg-white rounded-xl max-w-xl mx-auto my-6 p-6 relative"></div>
+</div>
+
+<div id="toast" class="fixed bottom-5 left-1/2 -translate-x-1/2 bg-ink text-white px-4 py-2 rounded-lg shadow-lg z-[70] hidden"></div>
+
+<script>
+/* ---------- Config & helpers ---------- */
+const CUR = '$'; // change to 'Rs.' or any currency symbol
+const PH = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="#E8E6DF"/><text x="200" y="165" font-size="48" text-anchor="middle" fill="#9A968A" font-family="sans-serif">No image</text></svg>');
+const db = { get:(k,d)=>{try{const v=JSON.parse(localStorage.getItem(k));return v==null?d:v}catch{return d}}, set:(k,v)=>localStorage.setItem(k,JSON.stringify(v)) };
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const money = n => CUR + Number(n).toFixed(2);
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const fmtDate = t => new Date(t).toLocaleString([], {dateStyle:'medium', timeStyle:'short'});
+async function hash(s){ if(!(window.crypto && crypto.subtle)) return s; const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)); return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join(''); }
+function toast(m){ const t=$('#toast'); t.textContent=m; t.classList.remove('hidden'); clearTimeout(toast.t); toast.t=setTimeout(()=>t.classList.add('hidden'),2200); }
+
+/* ---------- State ---------- */
+let authRole = 'buyer', authMode = 'login', sellerTab = 'products', query = '';
+const me = () => db.get('mp_users', []).find(u => u.id === db.get('mp_session', null)) || null;
+
+/* ---------- Rendering ---------- */
+function render(){
+  const u = me();
+  renderNav(u);
+  const m = $('#main');
+  m.innerHTML = !u ? authView() : u.role === 'seller' ? sellerView(u) : storeView(u);
+  if (u && u.role === 'buyer') renderCart(); else toggleCart(false);
+}
+function renderNav(u){
+  $('#nav').innerHTML = !u ? '' : `
+    <span class="hidden sm:inline text-slate-300">${esc(u.role==='seller'?u.business:u.username)}</span>
+    <span class="px-2 py-0.5 rounded-full bg-white/10 text-xs">${u.role==='seller'?'Seller':'Buyer'}</span>
+    ${u.role==='buyer' ? `<button onclick="openHistory()" class="btn-o !bg-transparent !text-white !border-white/30 !py-1.5"><i class="fas fa-receipt"></i><span class="hidden sm:inline">My orders</span></button>
+    <button onclick="toggleCart(true)" class="btn-o !bg-transparent !text-white !border-white/30 !py-1.5 relative" aria-label="Open cart"><i class="fas fa-shopping-cart"></i><span id="cc" class="bg-gold text-ink text-xs rounded-full px-1.5 font-bold">0</span></button>` : ''}
+    <button onclick="logout()" class="btn-o !bg-transparent !text-white !border-white/30 !py-1.5">Log out</button>`;
+}
+
+/* ---------- Auth ---------- */
+function authView(){
+  const reg = authMode === 'register', sel = authRole === 'seller';
+  const tab = (r,l,i) => `<button type="button" onclick="authRole='${r}';render()" class="flex-1 py-3 font-bold border-b-4 ${authRole===r?'border-gold text-ink':'border-transparent text-slate-500'}"><i class="fas ${i} mr-1"></i>${l}</button>`;
+  return `<div class="max-w-md mx-auto">
+    <h1 class="text-3xl font-extrabold text-ink mb-1">${sel?'Sell from your own shop':'Buy from local shops'}</h1>
+    <p class="text-slate-600 mb-5">${sel?'List your products, receive orders, and deliver them with your own team.':'Order from small businesses. They will contact you to arrange delivery.'}</p>
+    <div class="bg-white rounded-xl shadow p-6">
+      <div class="flex mb-5 border-b">${tab('buyer','I am a buyer','fa-user')}${tab('seller','I am a seller','fa-shop')}</div>
+      <form onsubmit="doAuth(event)" class="space-y-4">
+        <div><label class="lbl" for="a-un">Username</label><input id="a-un" class="inp" required autocomplete="username"></div>
+        ${reg && sel ? `<div><label class="lbl" for="a-biz">Business name</label><input id="a-biz" class="inp" required placeholder="e.g. Sunrise Grocers"></div>` : ''}
+        <div><label class="lbl" for="a-pw">Password</label><input id="a-pw" type="password" class="inp" required autocomplete="${reg?'new-password':'current-password'}"></div>
+        <p id="autherr" class="text-red-600 text-sm min-h-[1.25rem]" role="alert"></p>
+        <button class="btn-p w-full">${reg?'Create '+authRole+' account':'Log in as '+authRole}</button>
+      </form>
+      <p class="text-sm text-center mt-4 text-slate-600">${reg?'Already have an account?':'New here?'}
+        <button class="text-leaf font-bold underline" onclick="authMode='${reg?'login':'register'}';render()">${reg?'Log in':'Create an account'}</button></p>
+    </div></div>`;
+}
+async function doAuth(e){
+  e.preventDefault();
+  const un = $('#a-un').value.trim(), pw = $('#a-pw').value, biz = $('#a-biz') ? $('#a-biz').value.trim() : '';
+  const err = m => $('#autherr').textContent = m;
+  const users = db.get('mp_users', []);
+  const h = await hash(pw);
+  if (authMode === 'login'){
+    const u = users.find(x => x.username.toLowerCase() === un.toLowerCase() && x.role === authRole);
+    if (!u || u.pw !== h) return err(`Wrong username or password for a ${authRole} account. Check the account type above.`);
+    db.set('mp_session', u.id); render(); return;
+  }
+  if (un.length < 3) return err('Username needs at least 3 characters.');
+  if (pw.length < 4) return err('Password needs at least 4 characters.');
+  if (authRole === 'seller' && !biz) return err('Enter your business name.');
+  if (users.some(x => x.username.toLowerCase() === un.toLowerCase())) return err('That username is taken. Choose another.');
+  const u = { id: uid(), username: un, pw: h, role: authRole, business: authRole === 'seller' ? biz : null, created: Date.now() };
+  users.push(u); db.set('mp_users', users); db.set('mp_session', u.id);
+  toast('Welcome, ' + (u.business || u.username)); render();
+}
+function logout(){ db.set('mp_session', null); authMode = 'login'; toggleCart(false); closeModal(); render(); }
+
+/* ---------- Buyer: storefront ---------- */
+function gridHTML(){
+  const q = query.toLowerCase();
+  const ps = db.get('mp_products', []).filter(p => !q || (p.name + ' ' + p.business).toLowerCase().includes(q)).sort((a,b)=>b.created-a.created);
+  if (!ps.length) return `<div class="col-span-full text-center text-slate-500 py-16">${query?'No products match your search. Try a different word.':'No shops have listed products yet. Check back soon, or log in as a seller to add the first one.'}</div>`;
+  return ps.map(p => `<article class="bg-white rounded-xl shadow-sm overflow-hidden flex flex-col">
+    <img src="${esc(p.img||PH)}" onerror="this.onerror=null;this.src=PH" alt="${esc(p.name)}" class="w-full h-44 object-cover bg-slate-200">
+    <div class="p-4 flex flex-col flex-grow">
+      <p class="text-xs text-leaf font-bold mb-1"><i class="fas fa-shop mr-1"></i>Sold by ${esc(p.business)}</p>
+      <h3 class="font-bold text-lg leading-tight">${esc(p.name)}</h3>
+      <p class="text-sm text-slate-600 mt-1 flex-grow">${esc(p.desc)}</p>
+      <div class="flex items-center justify-between mt-4"><span class="text-xl font-extrabold text-ink">${money(p.price)}</span>
+      <button onclick="addCart('${p.id}')" class="btn-p !py-1.5 text-sm"><i class="fas fa-cart-plus"></i>Add</button></div>
+    </div></article>`).join('');
+}
+function storeView(u){
+  return `<div class="flex flex-col sm:flex-row sm:items-end justify-between gap-3 mb-6">
+    <div><h1 class="text-3xl font-extrabold text-ink">Fresh from local businesses</h1>
+    <p class="text-slate-600">Each item shows who sells it. That business will contact you to arrange delivery.</p></div>
+    <input class="inp sm:max-w-xs" placeholder="Search products or shops" value="${esc(query)}" oninput="query=this.value;$('#grid').innerHTML=gridHTML()" aria-label="Search"></div>
+    <div id="grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">${gridHTML()}</div>`;
+}
+
+/* ---------- Buyer: cart ---------- */
+const cartKey = () => 'mp_cart_' + me().id;
+const getCart = () => db.get(cartKey(), []);
+function cartLines(){ const ps = db.get('mp_products', []); return getCart().map(x => ({p: ps.find(p => p.id === x.pid), qty: x.qty})).filter(l => l.p); }
+function addCart(pid){ const c = getCart(), i = c.find(x => x.pid === pid); i ? i.qty++ : c.push({pid, qty:1}); db.set(cartKey(), c); renderCart(); toast('Added to cart'); }
+function qty(pid, d){ let c = getCart(); const i = c.find(x => x.pid === pid); if (!i) return; i.qty += d; c = c.filter(x => x.qty > 0); db.set(cartKey(), c); renderCart(); }
+function rmCart(pid){ db.set(cartKey(), getCart().filter(x => x.pid !== pid)); renderCart(); }
+function renderCart(){
+  const ls = cartLines(), total = ls.reduce((s,l)=>s+l.p.price*l.qty, 0);
+  db.set(cartKey(), ls.map(l => ({pid:l.p.id, qty:l.qty}))); // drop items whose listing was deleted
+  const n = ls.reduce((s,l)=>s+l.qty, 0);
+  if ($('#cc')) $('#cc').textContent = n;
+  $('#cart-total').textContent = money(total);
+  $('#co-btn').disabled = !ls.length; $('#co-btn').classList.toggle('opacity-50', !ls.length);
+  $('#cart-items').innerHTML = ls.length ? ls.map(l => `<div class="flex gap-3 py-3 border-b">
+    <img src="${esc(l.p.img||PH)}" onerror="this.onerror=null;this.src=PH" class="w-16 h-16 rounded object-cover bg-slate-200" alt="">
+    <div class="flex-grow min-w-0"><p class="font-bold truncate">${esc(l.p.name)}</p><p class="text-xs text-slate-500">${esc(l.p.business)}</p>
+      <div class="flex items-center gap-2 mt-1"><button class="w-7 h-7 rounded-full bg-slate-200" onclick="qty('${l.p.id}',-1)" aria-label="Decrease">-</button>
+      <span class="w-6 text-center font-bold">${l.qty}</span><button class="w-7 h-7 rounded-full bg-slate-200" onclick="qty('${l.p.id}',1)" aria-label="Increase">+</button></div></div>
+    <div class="text-right"><p class="font-bold">${money(l.p.price*l.qty)}</p><button class="text-red-600 text-sm mt-2" onclick="rmCart('${l.p.id}')" aria-label="Remove"><i class="fas fa-trash"></i></button></div></div>`).join('')
+    : '<p class="text-center text-slate-500 mt-10">Your cart is empty. Add something from the shops.</p>';
+}
+function toggleCart(open){ $('#cart').classList.toggle('translate-x-full', !open); $('#cart-ov').classList.toggle('hidden', !open); }
+
+/* ---------- Buyer: checkout & history ---------- */
+function openModal(h){ $('#mbox').innerHTML = `<button onclick="closeModal()" class="absolute top-3 right-4 text-2xl text-slate-400 hover:text-slate-700" aria-label="Close">&times;</button>` + h; $('#modal').classList.remove('hidden'); }
+function closeModal(){ $('#modal').classList.add('hidden'); }
+function openCheckout(){
+  const ls = cartLines(); if (!ls.length) return;
+  toggleCart(false);
+  const total = ls.reduce((s,l)=>s+l.p.price*l.qty, 0), sellers = new Set(ls.map(l=>l.p.sellerId)).size, last = db.get('mp_last_' + me().id, {});
+  openModal(`<h2 class="text-2xl font-extrabold mb-1">Checkout</h2>
+    <p class="text-sm text-slate-600 mb-4">${money(total)} across ${sellers} ${sellers>1?'shops':'shop'}.</p>
+    <form onsubmit="placeOrder(event)" class="space-y-4">
+      <div><label class="lbl" for="c-name">Full name</label><input id="c-name" class="inp" required value="${esc(last.name)}"></div>
+      <div><label class="lbl" for="c-phone">Phone number</label><input id="c-phone" type="tel" class="inp" required pattern="[0-9+()\\-\\s]{7,}" title="Enter a valid phone number" value="${esc(last.phone)}"></div>
+      <div><label class="lbl" for="c-addr">Delivery address</label><textarea id="c-addr" rows="3" class="inp" required>${esc(last.address)}</textarea></div>
+      <div><label class="lbl" for="c-notes">Note for the seller (optional)</label><input id="c-notes" class="inp" placeholder="Landmark, preferred time..."></div>
+      <fieldset><legend class="lbl">Payment method</legend>
+        <label class="flex items-center gap-2 border rounded-lg p-3 mb-2 cursor-pointer"><input type="radio" name="pay" value="Cash on Delivery (COD)" checked class="accent-emerald-700"><span><b>Cash on Delivery (COD)</b><br><span class="text-xs text-slate-500">Pay the delivery team when your order arrives.</span></span></label>
+        <label class="flex items-center gap-2 border rounded-lg p-3 cursor-pointer"><input type="radio" name="pay" value="Online Payment" class="accent-emerald-700"><span><b>Online Payment</b><br><span class="text-xs text-slate-500">Demo only: no money is charged. The seller will confirm payment details.</span></span></label>
+      </fieldset>
+      <div class="bg-amber-50 border border-amber-300 rounded-lg p-3 text-sm"><i class="fas fa-truck mr-1 text-amber-700"></i>
+        LocalBazaar only takes your order. Each business's own delivery team will contact you on the phone number above to arrange delivery. Your name, phone and address are shared with every shop in your order.</div>
+      <button class="btn-p w-full">Place order · ${money(total)}</button>
+    </form>`);
+}
+function placeOrder(e){
+  e.preventDefault();
+  const ls = cartLines(); if (!ls.length) return closeModal();
+  const cust = { name:$('#c-name').value.trim(), phone:$('#c-phone').value.trim(), address:$('#c-addr').value.trim(), notes:$('#c-notes').value.trim() };
+  const pay = document.querySelector('input[name=pay]:checked').value;
+  const groups = {};
+  ls.forEach(l => { // split by seller so each shop only sees its own items
+    const g = groups[l.p.sellerId] ||= { sellerId:l.p.sellerId, business:l.p.business, items:[], subtotal:0, status:'Pending' };
+    g.items.push({ productId:l.p.id, name:l.p.name, price:l.p.price, qty:l.qty }); g.subtotal += l.p.price * l.qty;
+  });
+  const gs = Object.values(groups);
+  const orders = db.get('mp_orders', []);
+  orders.push({ id:'ORD-' + uid().toUpperCase().slice(-6), buyerId:me().id, buyerUsername:me().username, customer:cust, payment:pay, created:Date.now(), groups:gs, total:gs.reduce((s,g)=>s+g.subtotal,0) });
+  db.set('mp_orders', orders); db.set('mp_last_' + me().id, cust); db.set(cartKey(), []);
+  renderCart(); toast('Order placed'); openHistory();
+}
+function openHistory(){
+  const os = db.get('mp_orders', []).filter(o => o.buyerId === me().id).sort((a,b)=>b.created-a.created);
+  openModal(`<h2 class="text-2xl font-extrabold mb-4">My orders</h2>` + (os.length ? os.map(o => `<div class="border rounded-lg p-4 mb-4">
+    <div class="flex justify-between text-sm text-slate-500"><b class="text-ink">${o.id}</b><span>${fmtDate(o.created)}</span></div>
+    ${o.groups.map(g => `<div class="mt-3"><p class="font-bold text-leaf"><i class="fas fa-shop mr-1"></i>${esc(g.business)}
+      <span class="ml-2 text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-medium">${esc(g.status)}</span></p>
+      ${g.items.map(i=>`<p class="text-sm flex justify-between"><span>${esc(i.name)} × ${i.qty}</span><span>${money(i.price*i.qty)}</span></p>`).join('')}</div>`).join('')}
+    <p class="flex justify-between font-bold border-t mt-3 pt-2"><span>Total</span><span>${money(o.total)}</span></p>
+    <p class="text-sm mt-1"><i class="fas fa-wallet mr-1"></i>${esc(o.payment)}</p>
+    <p class="text-xs text-slate-600 mt-2 bg-slate-50 rounded p-2"><i class="fas fa-truck mr-1"></i>Each shop's delivery team will contact you on ${esc(o.customer.phone)} to arrange delivery to ${esc(o.customer.address)}.</p>
+  </div>`).join('') : '<p class="text-slate-500 text-center py-8">You have not placed any orders yet.</p>'));
+}
+
+/* ---------- Seller dashboard ---------- */
+function sellerOrders(u){ return db.get('mp_orders', []).flatMap(o => o.groups.filter(g => g.sellerId === u.id).map(g => ({o, g}))).sort((a,b)=>b.o.created-a.o.created); }
+function sellerView(u){
+  const so = sellerOrders(u), mine = db.get('mp_products', []).filter(p => p.sellerId === u.id);
+  const earn = so.reduce((s,x)=>s+x.g.subtotal, 0), open = so.filter(x=>x.g.status!=='Delivered').length;
+  const stat = (l,v) => `<div class="bg-white rounded-xl shadow-sm p-4"><p class="text-sm text-slate-500">${l}</p><p class="text-2xl font-extrabold text-ink">${v}</p></div>`;
+  const tab = (t,l) => `<button onclick="sellerTab='${t}';render()" class="px-4 py-2 font-bold border-b-4 ${sellerTab===t?'border-gold text-ink':'border-transparent text-slate-500'}">${l}</button>`;
+  return `<h1 class="text-3xl font-extrabold text-ink">${esc(u.business)}</h1>
+    <p class="text-slate-600 mb-5">You deliver your own orders. LocalBazaar only passes you the buyer's details.</p>
+    <div class="grid grid-cols-3 gap-3 mb-6">${stat('Products', mine.length)}${stat('Orders to deliver', open)}${stat('Total earnings', money(earn))}</div>
+    <div class="border-b mb-6 flex">${tab('products','Products')}${tab('orders','Orders (' + so.length + ')')}</div>
+    ${sellerTab === 'products' ? productsPane(mine) : ordersPane(so)}`;
+}
+function productsPane(mine){
+  return `<div class="grid lg:grid-cols-3 gap-6">
+    <form onsubmit="addProduct(event)" class="bg-white rounded-xl shadow-sm p-5 space-y-3 h-fit">
+      <h2 class="font-bold text-lg">Add a product</h2>
+      <div><label class="lbl" for="p-name">Name</label><input id="p-name" class="inp" required></div>
+      <div><label class="lbl" for="p-price">Price (${CUR})</label><input id="p-price" type="number" min="0.01" step="0.01" class="inp" required></div>
+      <div><label class="lbl" for="p-desc">Description</label><textarea id="p-desc" rows="3" class="inp" required></textarea></div>
+      <div><label class="lbl" for="p-img">Image URL</label><input id="p-img" type="url" class="inp" placeholder="https://..."></div>
+      <button class="btn-p w-full"><i class="fas fa-plus"></i>List product</button></form>
+    <div class="lg:col-span-2 grid sm:grid-cols-2 gap-4 content-start">${mine.length ? mine.map(p => `<article class="bg-white rounded-xl shadow-sm overflow-hidden">
+      <img src="${esc(p.img||PH)}" onerror="this.onerror=null;this.src=PH" class="w-full h-36 object-cover bg-slate-200" alt="${esc(p.name)}">
+      <div class="p-4"><h3 class="font-bold">${esc(p.name)}</h3><p class="text-sm text-slate-600 line-clamp-2">${esc(p.desc)}</p>
+      <div class="flex justify-between items-center mt-3"><b>${money(p.price)}</b><button onclick="delProduct('${p.id}')" class="text-red-600 text-sm font-bold"><i class="fas fa-trash mr-1"></i>Delete</button></div></div></article>`).join('')
+      : '<p class="sm:col-span-2 text-center text-slate-500 py-12 bg-white rounded-xl">You have no products yet. Add your first one using the form.</p>'}</div></div>`;
+}
+function addProduct(e){
+  e.preventDefault(); const u = me(), ps = db.get('mp_products', []);
+  ps.push({ id:uid(), sellerId:u.id, business:u.business, name:$('#p-name').value.trim(), price:parseFloat($('#p-price').value), desc:$('#p-desc').value.trim(), img:$('#p-img').value.trim(), created:Date.now() });
+  db.set('mp_products', ps); toast('Product listed'); render();
+}
+function delProduct(id){ if (!confirm('Delete this product? It will disappear from the store. Past orders are kept.')) return; db.set('mp_products', db.get('mp_products', []).filter(p => p.id !== id)); toast('Product deleted'); render(); }
+function ordersPane(so){
+  if (!so.length) return '<p class="text-center text-slate-500 py-12 bg-white rounded-xl">No orders yet. They will appear here with the buyer\'s delivery details.</p>';
+  return `<div class="space-y-5">${so.map(({o,g}) => `<article class="bg-white rounded-xl shadow-sm overflow-hidden">
+    <div class="px-4 py-2 bg-slate-100 flex justify-between text-sm"><b>${o.id}</b><span>${fmtDate(o.created)}</span></div>
+    <div class="p-4 grid md:grid-cols-2 gap-4">
+      <div class="bg-amber-50 border-2 border-gold rounded-lg p-4">
+        <p class="font-extrabold text-ink mb-2"><i class="fas fa-truck mr-1"></i>Deliver to</p>
+        <p class="text-lg font-bold">${esc(o.customer.name)}</p>
+        <p><i class="fas fa-phone mr-1 text-leaf"></i><a class="font-bold underline" href="tel:${esc(o.customer.phone)}">${esc(o.customer.phone)}</a></p>
+        <p class="mt-1"><i class="fas fa-location-dot mr-1 text-leaf"></i>${esc(o.customer.address).replace(/\n/g,'<br>')}</p>
+        ${o.customer.notes ? `<p class="text-sm mt-2 italic">Note: ${esc(o.customer.notes)}</p>` : ''}
+        <p class="text-xs text-slate-600 mt-3">Your delivery team handles this order. LocalBazaar does not deliver.</p></div>
+      <div>${g.items.map(i => `<p class="flex justify-between text-sm py-1 border-b"><span>${esc(i.name)} × ${i.qty}</span><span>${money(i.price*i.qty)}</span></p>`).join('')}
+        <p class="flex justify-between font-extrabold text-lg mt-2"><span>Your earnings</span><span class="text-leaf">${money(g.subtotal)}</span></p>
+        <p class="text-sm mt-1"><i class="fas fa-wallet mr-1"></i>Payment: <b>${esc(o.payment)}</b>${o.payment.startsWith('Cash') ? ' (collect ' + money(g.subtotal) + ' on delivery)' : ''}</p>
+        <label class="lbl mt-3" for="st-${o.id}">Delivery status</label>
+        <select id="st-${o.id}" class="inp" onchange="setStatus('${o.id}','${g.sellerId}',this.value)">
+          ${['Pending','Out for delivery','Delivered'].map(s=>`<option ${g.status===s?'selected':''}>${s}</option>`).join('')}</select></div>
+    </div></article>`).join('')}</div>`;
+}
+function setStatus(oid, sid, val){
+  const os = db.get('mp_orders', []), o = os.find(x => x.id === oid), g = o && o.groups.find(x => x.sellerId === sid);
+  if (g){ g.status = val; db.set('mp_orders', os); toast('Status updated'); render(); }
+}
+
+/* ---------- Init ---------- */
+document.addEventListener('keydown', e => { if (e.key === 'Escape'){ closeModal(); toggleCart(false); } });
+$('#modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
+render();
+</script>
+</body>
+</html>
